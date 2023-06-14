@@ -31,10 +31,10 @@ export class User extends BaseEntity {
   @Column({
     nullable: true,
   })
-  currentHashedToken?: string;
+  currentToken?: string;
 
   @Column({
     nullable: true,
   })
-  currentHashedRefreshToken?: string;
+  refreshToken?: string;
 }
