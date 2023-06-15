@@ -1,0 +1,101 @@
+import { forwardRef, Inject, Injectable } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { JwtPayload } from './strategies/jwt.strategy';
+import { sign } from 'jsonwebtoken';
+import { User } from '../users/entities/user.entity';
+import { v4 as uuid } from 'uuid';
+import { AuthLoginDto } from './dto/auth-login.dto';
+import { Response } from 'express';
+import * as bcrypt from 'bcrypt';
+
+@Injectable()
+export class AuthService {
+  constructor(
+    @Inject(forwardRef(() => ConfigService))
+    private configService: ConfigService,
+  ) {}
+
+  private createToken(currentToken: string): {
+    accessToken: string;
+    expiresIn: number;
+  } {
+    const payload: JwtPayload = { id: currentToken };
+    const expiresIn = +this.configService.get('JWT_EXPIRES_SECONDS');
+    const accessToken = sign(
+      payload,
+      this.configService.get('JWT_ACCESS_KEY'),
+      {
+        expiresIn,
+      },
+    );
+    return {
+      accessToken,
+      expiresIn,
+    };
+  }
+
+  private async generateToken(user: User): Promise<string> {
+    let token;
+    let userWithThisToken = null;
+    do {
+      token = uuid();
+      userWithThisToken = await User.findOneBy({ currentToken: token });
+    } while (!!userWithThisToken);
+    user.currentToken = token;
+    await user.save();
+
+    return token;
+  }
+
+  async login(req: AuthLoginDto, res: Response): Promise<any> {
+    try {
+      const user = await User.findOneBy({
+        username: req.username,
+      });
+
+      if (!user) {
+        return res.status(401).json({ error: 'Invalid credentials' });
+      }
+
+      const pwdIsValid = await bcrypt.compare(
+        req.password,
+        user.hashedPassword,
+      );
+
+      if (!pwdIsValid) {
+        return res.status(401).json({ error: 'Invalid credentials' });
+      }
+
+      const token = await this.createToken(await this.generateToken(user));
+
+      return res
+        .cookie('jwt', token.accessToken, {
+          secure:
+            this.configService.get<string>('JWT_PROTOCOL_SECURE') === 'true',
+          domain: this.configService.get<string>('DOMAIN'),
+          httpOnly: this.configService.get('JWT_HTTP_ONLY') === 'true',
+          maxAge: +this.configService.get('JWT_EXPIRES_SECONDS'),
+        })
+        .json({ ok: true });
+    } catch (e) {
+      return res.json({ error: e.message });
+    }
+  }
+
+  async logout(user: User, res: Response) {
+    try {
+      user.currentToken = null;
+      await user.save();
+      res.clearCookie('jwt', {
+        secure:
+          this.configService.get<string>('JWT_PROTOCOL_SECURE') === 'true',
+        domain: this.configService.get<string>('DOMAIN'),
+        httpOnly: this.configService.get('JWT_HTTP_ONLY') === 'true',
+        maxAge: +this.configService.get('JWT_EXPIRES_SECONDS'),
+      });
+      return res.json({ ok: true });
+    } catch (e) {
+      return res.json({ error: e.message });
+    }
+  }
+}
