@@ -7,6 +7,7 @@ import { v4 as uuid } from 'uuid';
 import { AuthLoginDto } from './dto/auth-login.dto';
 import { Response } from 'express';
 import * as bcrypt from 'bcrypt';
+import { cookieConfig } from '../config/cookie.config';
 
 @Injectable()
 export class AuthService {
@@ -15,36 +16,64 @@ export class AuthService {
     private configService: ConfigService,
   ) {}
 
-  private createToken(currentToken: string): {
+  private createTokens({ currentAccessToken, currentRefreshToken }): {
     accessToken: string;
-    expiresIn: number;
+    refreshToken: string;
   } {
-    const payload: JwtPayload = { id: currentToken };
-    const expiresIn = +this.configService.get('JWT_EXPIRES_SECONDS');
+    const accessTokenPayload: JwtPayload = { id: currentAccessToken };
+    const refreshTokenPayload: JwtPayload = { id: currentRefreshToken };
+
     const accessToken = sign(
-      payload,
-      this.configService.get('JWT_ACCESS_KEY'),
+      accessTokenPayload,
+      this.configService.get('JWT_ACCESS_TOKEN_SECRET'),
       {
-        expiresIn,
+        expiresIn: +this.configService.get('JWT_ACCESS_TOKEN_EXPIRATION_TIME'),
       },
     );
+
+    const refreshToken = sign(
+      refreshTokenPayload,
+      this.configService.get('JWT_REFRESH_TOKEN_SECRET'),
+      {
+        expiresIn: +this.configService.get('JWT_REFRESH_TOKEN_EXPIRATION_TIME'),
+      },
+    );
+
     return {
       accessToken,
-      expiresIn,
+      refreshToken,
     };
   }
 
-  private async generateToken(user: User): Promise<string> {
-    let token;
+  private async generateTokens(
+    user: User,
+  ): Promise<{ currentAccessToken: string; currentRefreshToken: string }> {
+    let currentAccessToken;
+    let currentRefreshToken;
     let userWithThisToken = null;
+
     do {
-      token = uuid();
-      userWithThisToken = await User.findOneBy({ currentToken: token });
+      currentAccessToken = uuid();
+      userWithThisToken = await User.findOneBy({
+        currentAccessToken,
+      });
     } while (!!userWithThisToken);
-    user.currentToken = token;
+    user.currentAccessToken = currentAccessToken;
+
+    do {
+      currentRefreshToken = uuid();
+      userWithThisToken = await User.findOneBy({
+        currentRefreshToken,
+      });
+    } while (!!userWithThisToken);
+    user.currentRefreshToken = currentRefreshToken;
+
     await user.save();
 
-    return token;
+    return {
+      currentAccessToken,
+      currentRefreshToken,
+    };
   }
 
   async login(req: AuthLoginDto, res: Response): Promise<any> {
@@ -66,15 +95,18 @@ export class AuthService {
         return res.status(401).json({ error: 'Invalid credentials' });
       }
 
-      const token = await this.createToken(await this.generateToken(user));
+      const { accessToken, refreshToken } = this.createTokens(
+        await this.generateTokens(user),
+      );
 
       return res
-        .cookie('jwt', token.accessToken, {
-          secure:
-            this.configService.get<string>('JWT_PROTOCOL_SECURE') === 'true',
-          domain: this.configService.get<string>('DOMAIN'),
-          httpOnly: this.configService.get('JWT_HTTP_ONLY') === 'true',
-          maxAge: +this.configService.get('JWT_EXPIRES_SECONDS'),
+        .cookie('accessToken', accessToken, {
+          ...cookieConfig,
+          maxAge: +this.configService.get('JWT_ACCESS_TOKEN_EXPIRATION_TIME'),
+        })
+        .cookie('refreshToken', refreshToken, {
+          ...cookieConfig,
+          maxAge: +this.configService.get('JWT_REFRESH_TOKEN_EXPIRATION_TIME'),
         })
         .json({ ok: true });
     } catch (e) {
@@ -84,16 +116,40 @@ export class AuthService {
 
   async logout(user: User, res: Response) {
     try {
-      user.currentToken = null;
+      user.currentAccessToken = null;
+      user.currentRefreshToken = null;
       await user.save();
-      res.clearCookie('jwt', {
-        secure:
-          this.configService.get<string>('JWT_PROTOCOL_SECURE') === 'true',
-        domain: this.configService.get<string>('DOMAIN'),
-        httpOnly: this.configService.get('JWT_HTTP_ONLY') === 'true',
-        maxAge: +this.configService.get('JWT_EXPIRES_SECONDS'),
-      });
+      res
+        .clearCookie('accessToken', {
+          ...cookieConfig,
+          maxAge: +this.configService.get('JWT_ACCESS_TOKEN_EXPIRATION_TIME'),
+        })
+        .clearCookie('refreshToken', {
+          ...cookieConfig,
+          maxAge: +this.configService.get('JWT_REFRESH_TOKEN_EXPIRATION_TIME'),
+        });
       return res.json({ ok: true });
+    } catch (e) {
+      return res.json({ error: e.message });
+    }
+  }
+
+  async refreshToken(user: User, res: Response): Promise<any> {
+    try {
+      const { accessToken, refreshToken } = this.createTokens(
+        await this.generateTokens(user),
+      );
+
+      return res
+        .cookie('accessToken', accessToken, {
+          ...cookieConfig,
+          maxAge: +this.configService.get('JWT_ACCESS_TOKEN_EXPIRATION_TIME'),
+        })
+        .cookie('refreshToken', refreshToken, {
+          ...cookieConfig,
+          maxAge: +this.configService.get('JWT_REFRESH_TOKEN_EXPIRATION_TIME'),
+        })
+        .json({ ok: true });
     } catch (e) {
       return res.json({ error: e.message });
     }
