@@ -15,18 +15,18 @@ export interface JwtPayload {
 }
 
 function cookieExtractor(req: any): null | string {
-  return req && req.cookies ? req.cookies?.jwt ?? null : null;
+v  return req && req.cookies ? req.cookies?.accessToken ?? null : null;
 }
 
 @Injectable()
-export class JwtStrategy extends PassportStrategy(Strategy) {
+export class JwtStrategy extends PassportStrategy(Strategy, 'jwt-access') {
   constructor(
     @Inject(forwardRef(() => ConfigService))
     private configService: ConfigService,
   ) {
     super({
       jwtFromRequest: cookieExtractor,
-      secretOrKey: configService.get('JWT_ACCESS_KEY'),
+      secretOrKey: configService.get('JWT_ACCESS_TOKEN_SECRET'),
     });
   }
 
@@ -35,7 +35,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       return done(new UnauthorizedException(), false);
     }
 
-    const user = await User.findOneBy({ currentToken: payload.id });
+    const user = await User.findOneBy({ currentAccessToken: payload.id });
 
     if (!user) {
       return done(new UnauthorizedException(), false);
