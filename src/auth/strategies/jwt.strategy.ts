@@ -15,7 +15,7 @@ export interface JwtPayload {
 }
 
 function cookieExtractor(req: any): null | string {
-v  return req && req.cookies ? req.cookies?.accessToken ?? null : null;
+  return req && req.cookies ? req.cookies?.accessToken ?? null : null;
 }
 
 @Injectable()
