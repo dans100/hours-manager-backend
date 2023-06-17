@@ -1,15 +1,25 @@
 import { Strategy } from 'passport-jwt';
 import { PassportStrategy } from '@nestjs/passport';
-import { forwardRef, Inject, Injectable } from '@nestjs/common';
+import {
+  forwardRef,
+  Inject,
+  Injectable,
+  UnauthorizedException,
+} from '@nestjs/common';
+
 import { ConfigService } from '@nestjs/config';
-import { Request } from 'express';
+import { User } from '../../users/entities/user.entity';
+
+export interface JwtPayload {
+  id: string;
+}
 
 function cookieExtractor(req: any): null | string {
-  return req && req.cookies ? req.cookies?.refresh ?? null : null;
+  return req && req.cookies ? req.cookies?.refreshToken ?? null : null;
 }
 
 @Injectable()
-export class RefreshTokenStrategy extends PassportStrategy(
+export class RefreshJwtStrategy extends PassportStrategy(
   Strategy,
   'jwt-refresh',
 ) {
@@ -19,18 +29,21 @@ export class RefreshTokenStrategy extends PassportStrategy(
   ) {
     super({
       jwtFromRequest: cookieExtractor,
-      secretOrKey: configService.get('JWT_REFRESH_KEY'),
+      secretOrKey: configService.get('JWT_REFRESH_TOKEN_SECRET'),
     });
   }
-  async validate(req: Request, payload: any) {
-    const refreshToken = req.cookies.refresh;
-    return { ...payload, refreshToken };
-  }
 
-  private static extractJWT(req: Request): string | null {
-    if (req.cookies && 'refresh_token' in req.cookies) {
-      return req.cookies.refresh_token;
+  async validate(payload: JwtPayload, done: (error, user) => void) {
+    if (!payload || !payload.id) {
+      return done(new UnauthorizedException(), false);
     }
-    return null;
+
+    const user = await User.findOneBy({ currentRefreshToken: payload.id });
+
+    if (!user) {
+      return done(new UnauthorizedException(), false);
+    }
+
+    done(null, user);
   }
 }
